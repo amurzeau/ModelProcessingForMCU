@@ -1,0 +1,7 @@
+venv
+.directory
+*.onnx
+st_ai_output
+st_ai_ws
+vela
+.vscode/perl-lang

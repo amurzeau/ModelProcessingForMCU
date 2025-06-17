@@ -1,0 +1,26 @@
+// This file provides information for the atonn compiler.
+// It allows to describe multiple use cases, that can be later referrenced in the call to stm.ai CLI.
+//
+// The "Globals" part is not mandatory
+//      Only one key is supported for now within this part:
+//      "NA_binary" : allows to indicate a path to an alternative binary when using the aton compiler
+// The "Profiles" part is mandatory in this file, and must be not empty:
+//      Each profile is made up of
+//          - the name of the profile (key of the profile)
+//          - a "memory_pool" key: path to a valid .mpool file (absolute, relative to the current file, ...)
+//          - a "machine_desc" key: path to a valid .mdesc file (absolute, relative to the current file, ...)
+//          - an "options" key: options to pass to the compiler
+//                IMPORTANT: The options shall contain --all-buffers-info if planning to use the "validation stack"
+{
+    "Globals": {
+    // Uncomment the following line to use your own atonn.exe compiler binary
+    //    "NA_binary": "C:\\Users\\foobar\\CODE\\ATON_Compiler\\v0.3.7-1382\\windows\\atonn.exe"
+    },
+    "Profiles": {
+        "n6-noextmem": {
+            "memory_pool": "stm32n6__noextmem.mpool",
+            "machine_desc": "stm32n6.mdesc",
+            "options" : "--enable-epoch-controller --optimization 3 --onnx-output processed.onnx --save-all --all-buffers-info --mvei --cache-maintenance --Oauto-sched --native-float --enable-virtual-mem-pools --Omax-ca-pipe 4 --Ocache-opt --Os"
+        }
+    }
+}
