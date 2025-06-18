@@ -11,7 +11,7 @@ from onnxscript.ir._tape import Builder
 import onnx
 import numpy
 from onnx.reference import ReferenceEvaluator
-from onnx import numpy_helper
+from onnx import numpy_helper, version_converter
 
 from google.protobuf.internal.containers import (  # type: ignore
     RepeatedCompositeFieldContainer,
@@ -534,6 +534,7 @@ def crop_tensor_from_257_to_256(graph: onnx.GraphProto):
 
 basename = os.path.basename(os.path.splitext(sys.argv[1])[0])
 onnx_model = onnx.load(sys.argv[1])
+onnx_model = version_converter.convert_version(onnx_model, 13)
 make_dim_param_fixed(onnx_model.graph, "batch_size", 1)
 modified_model = onnx.load(sys.argv[1])
 make_dim_param_fixed(modified_model.graph, "batch_size", 1)
