@@ -12,6 +12,7 @@ import onnx
 import numpy
 from onnx.reference import ReferenceEvaluator
 from onnx import numpy_helper, version_converter
+import preprocessing_wav
 
 from google.protobuf.internal.containers import (  # type: ignore
     RepeatedCompositeFieldContainer,
@@ -612,12 +613,14 @@ for i in range(20):
 class XXXDataReader(CalibrationDataReader):
     def __init__(self):
         self.enum_data = None
+        self.data = preprocessing_wav.generate_calibration_data("denoiser_dns_rewritten_p.onnx")
         pass
 
     def get_next(self):
-        if self.enum_data is None:
-            self.enum_data = iter(calibration_data)
-        return next(self.enum_data, None)
+        #if self.enum_data is None:
+        #    self.enum_data = iter(calibration_data)
+        #return next(self.enum_data, None)
+        return next(self.data)
 
     def rewind(self):
         pass
