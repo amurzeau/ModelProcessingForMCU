@@ -109,6 +109,7 @@ def GRUCond(op, X, W, R, B, sequence_lens, initial_h, hidden_size, linear_before
     return axes.const_value.numpy() == numpy.array([1])
 
 const_1 = None
+const_minus_1 = None
 def LoweredGRU(op: Builder, X: ir.Value,
         W: ir.Value,
         R: ir.Value,
@@ -121,6 +122,7 @@ def LoweredGRU(op: Builder, X: ir.Value,
     global index
     global onnx_model_ir
     global const_1
+    global const_minus_1
 
     hidden_size_val = hidden_size.as_int()
 
@@ -172,7 +174,9 @@ def LoweredGRU(op: Builder, X: ir.Value,
     # Ht = (1 - zt) (.) ht + zt (.) Ht-1
     if const_1 is None:
         const_1 = op.initializer(ir.tensor([numpy.float32(1)], name=f"const_1"))
-    Ht = op.Add(op.Mul(op.Add(const_1, op.Neg(zt)), ht), op.Mul(zt, Y_h_input), _outputs=[Y_h_output])
+    if const_minus_1 is None:
+        const_minus_1 = op.initializer(ir.tensor([numpy.float32(-1)], name=f"const_minus_1"))
+    Ht = op.Add(op.Mul(op.Add(const_1, op.Mul(zt, const_minus_1)), ht), op.Mul(zt, Y_h_input), _outputs=[Y_h_output])
     Ht.type = ir.TensorType(ir.DataType.FLOAT)
     Ht.shape = ir.Shape([1, hidden_size_val])
 
