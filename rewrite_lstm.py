@@ -30,22 +30,27 @@ def split(op, input: ir.Value, num_outputs, name_base=None):
 
 # Rewrite LSTM with Gemm
 index = 0
-def LSTM(op, X, W, R, B, sequence_lens, initial_h, initial_c):
-    return op.Squeeze(op.LSTM(X, W, R, B, sequence_lens, initial_h, initial_c, direction="forward", hidden_size=256, input_forget=0), axes=[1])
+def LSTM(op, X, W, R, B, sequence_lens, initial_h, initial_c, axes):
+    return op.Squeeze(op.LSTM(X, W, R, B, sequence_lens, initial_h, initial_c, direction="forward", hidden_size=256, input_forget=0), axes)
+
+def LSTMCond(op, X, W, R, B, sequence_lens, initial_h, initial_c, axes: ir.Value):
+    return axes.const_value.numpy() == numpy.array([1])
 
 def LoweredLSTM(op: Builder, X: ir.Value,
         W: ir.Value,
         R: ir.Value,
         B: ir.Value,
-        sequence_lens: ir.Value, initial_h: ir.Value, initial_c: ir.Value):
+        sequence_lens: ir.Value, initial_h: ir.Value, initial_c: ir.Value, axes):
     global index
     global onnx_model_ir
 
-    x = op.Squeeze(X, axes=[0])
-    w = op.Squeeze(W, axes=[0])
-    r = op.Squeeze(R, axes=[0])
+    zero_value_tensor = op.initializer(ir.tensor([0], name=f"zero_const"))
+
+    x = op.Squeeze(X, zero_value_tensor)
+    w = op.Squeeze(W, zero_value_tensor)
+    r = op.Squeeze(R, zero_value_tensor)
     Wb , Rb = split(op, B, 2)
-    wb_plus_rb = op.Squeeze(op.Add(Wb, Rb), axes=[0])
+    wb_plus_rb = op.Squeeze(op.Add(Wb, Rb), zero_value_tensor)
     # x = 1, 257
     # w = 257, 1024
     # wb_plus_rb = 1, 1024
@@ -89,7 +94,7 @@ def LoweredLSTM(op: Builder, X: ir.Value,
     onnx_model_ir.graph.outputs.append(Y_h)
 
 
-    output = op.Unsqueeze(Y_h, axes=[0])
+    output = op.Unsqueeze(Y_h, zero_value_tensor)
     
     index = index + 1
 
@@ -97,8 +102,11 @@ def LoweredLSTM(op: Builder, X: ir.Value,
 
 
 # Rewrite GRU with Gemm
-def GRU(op, X, W, R, B, sequence_lens, initial_h, hidden_size, linear_before_reset):
-    return op.Squeeze(op.GRU(X, W, R, B, sequence_lens, initial_h, direction="forward", hidden_size=hidden_size, linear_before_reset=linear_before_reset), axes=[1])
+def GRU(op, X, W, R, B, sequence_lens, initial_h, hidden_size, linear_before_reset, axes):
+    return op.Squeeze(op.GRU(X, W, R, B, sequence_lens, initial_h, direction="forward", hidden_size=hidden_size, linear_before_reset=linear_before_reset), axes)
+
+def GRUCond(op, X, W, R, B, sequence_lens, initial_h, hidden_size, linear_before_reset, axes: ir.Value):
+    return axes.const_value.numpy() == numpy.array([1])
 
 const_1 = None
 def LoweredGRU(op: Builder, X: ir.Value,
@@ -108,23 +116,27 @@ def LoweredGRU(op: Builder, X: ir.Value,
         sequence_lens: ir.Value,
         initial_h: ir.Value,
         hidden_size: ir.Attr,
-        linear_before_reset: ir.Attr):
+        linear_before_reset: ir.Attr,
+        axes):
     global index
     global onnx_model_ir
     global const_1
 
     hidden_size_val = hidden_size.as_int()
 
-    x = op.Squeeze(X, axes=[0])
-    w = op.Squeeze(W, axes=[0])
-    r = op.Squeeze(R, axes=[0])
-    b = op.Squeeze(B, axes=[0])
+    zero_value_tensor = op.initializer(ir.tensor([0], name=f"zero_const"))
+
+    x = op.Squeeze(X, zero_value_tensor)
+    w = op.Squeeze(W, zero_value_tensor)
+    r = op.Squeeze(R, zero_value_tensor)
+    b = op.Squeeze(B, zero_value_tensor)
 
     # Bias must be rank 1 to avoid this error:
     # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
 
     split_outputs = [f"gru_{index}_split_b_{i}" for i in range(2)]
-    b_splitted = op.Split(b, split=[hidden_size_val*3, hidden_size_val*3], axis=0, _outputs=split_outputs)
+
+    b_splitted = op.Split(b, axis=0, _outputs=split_outputs)
     Wb, Rb = b_splitted
 
     Y_h_input = ir.Value(name=f"gru_hidden_input_h_{index}", type=ir.TensorType(ir.DataType.FLOAT), shape=ir.Shape([1, hidden_size_val]))
@@ -141,66 +153,21 @@ def LoweredGRU(op: Builder, X: ir.Value,
         gemmY = op.Gemm(Y_h_input, r, Rb, alpha=1.0, beta=1.0, transA=0, transB=1)
 
     split_outputs = [f"gru_{index}_split_gemmX_{i}" for i in range(2)]
-    gemmX_splitted = op.Split(gemmX, split=[hidden_size_val*2, hidden_size_val], axis=1, _outputs=split_outputs)
+    gru_x_split = op.initializer(ir.tensor([hidden_size_val*2, hidden_size_val], name=f"gru_x_split"))
+    gemmX_splitted = op.Split(gemmX, gru_x_split, axis=1, _outputs=split_outputs)
     zrtX, htX = gemmX_splitted
 
     split_outputs = [f"gru_{index}_split_gemmY_{i}" for i in range(2)]
-    gemmY_splitted = op.Split(gemmY, split=[hidden_size_val*2, hidden_size_val], axis=1, _outputs=split_outputs)
+    gemmY_splitted = op.Split(gemmY, gru_x_split, axis=1, _outputs=split_outputs)
     zrtY, htY = gemmY_splitted
 
     zrt = op.Sigmoid(op.Add(zrtX, zrtY))
 
     split_outputs = [f"gru_{index}_split_zrt_{i}" for i in range(2)]
-    zrt_splitted = op.Split(zrt, split=[hidden_size_val, hidden_size_val], axis=1, _outputs=split_outputs)
+    zrt_splitted = op.Split(zrt, axis=1, _outputs=split_outputs)
     zt, rt = zrt_splitted
 
     ht = op.Tanh(op.Add(htX, op.Mul(htY, rt)))
-
-    # split_outputs = [f"gru_{index}_split_b_{i}" for i in range(6)]
-    # b = op.Split(b, axis=0, _outputs=split_outputs)
-    # Wbz, Wbr, Wbh, Rbz, Rbr, Rbh = b
-    # 
-    # split_outputs = [f"gru_{index}_split_w_{i}" for i in range(3)]
-    # w = op.Split(w, axis=0, _outputs=split_outputs)
-    # Wz, Wr, Wh = w
-    # 
-    # split_outputs = [f"gru_{index}_split_r_{i}" for i in range(3)]
-    # r = op.Split(r, axis=0, _outputs=split_outputs)
-    # Rz, Rr, Rh = r
-
-    # zt = f(Xt*(Wz^T) + Ht-1*(Rz^T) + Wbz + Rbz)
-    #zt = op.Sigmoid(
-    #    op.Add(
-    #        op.Gemm(x, Wz, alpha=1.0, beta=1.0, transA=0, transB=1),
-    #        op.Gemm(Y_h_input, Rz, op.Add(Wbz, Rbz), alpha=1.0, beta=1.0, transA=0, transB=1)
-    #    )
-    #)
-    #
-    ## rt = f(Xt*(Wr^T) + Ht-1*(Rr^T) + Wbr + Rbr)
-    #rt = op.Sigmoid(
-    #    op.Add(
-    #        op.Gemm(x, Wr, alpha=1.0, beta=1.0, transA=0, transB=1),
-    #        op.Gemm(Y_h_input, Rr, op.Add(Wbr, Rbr), alpha=1.0, beta=1.0, transA=0, transB=1)
-    #    )
-    #)
-
-    # rt = f(Xt*(Wr^T) + Ht-1*(Rr^T) + Wbr + Rbr)
-    #if linear_before_reset.as_int() == 0:
-    #    # ht = g(Xt*(Wh^T) + (rt (.) Ht-1)*(Rh^T) + Rbh + Wbh) # default, when linear_before_reset = 0
-    #    ht = op.Tanh(
-    #        op.Add(
-    #            op.Gemm(x, Wh, op.Add(Wbh, Rbh), alpha=1.0, beta=1.0, transA=0, transB=1),
-    #            op.Mul(op.Gemm(Y_h_input, Rh), rt)
-    #        )
-    #    )
-    #else:
-    #    # ht = g(Xt*(Wh^T) + (rt (.) (Ht-1*(Rh^T) + Rbh)) + Wbh) # when linear_before_reset != 0
-    #    ht = op.Tanh(
-    #        op.Add(
-    #            op.Gemm(x, Wh, Wbh, alpha=1.0, beta=1.0, transA=0, transB=1),
-    #            op.Mul(op.Gemm(Y_h_input, Rh, Rbh, alpha=1.0, beta=1.0, transA=0, transB=1), rt)
-    #        )
-    #    )
 
     # Ht = (1 - zt) (.) ht + zt (.) Ht-1
     if const_1 is None:
@@ -211,48 +178,53 @@ def LoweredGRU(op: Builder, X: ir.Value,
 
     onnx_model_ir.graph.outputs.append(Ht)
     
-    output = op.Unsqueeze(Ht, axes=[0])
+    output = op.Unsqueeze(Ht, zero_value_tensor)
     
     index = index + 1
 
     return output
 
 def TransposeSqueeze(op, X, perm, axes):
-    return op.Squeeze(op.Transpose(X, perm=perm), axes=axes)
+    return op.Squeeze(op.Transpose(X, perm=perm), axes)
 
-def TransposeSqueezeCond(op, X, perm, axes):
+def TransposeSqueezeCond(op, X, perm, axes: ir.Value):
     perm = perm.as_ints()
-    axes = axes.as_ints()
+    axes = axes.const_value.numpy()
     if perm[0] == 2 and perm[1] == 0 and perm[2] == 1 and axes[0] == 0:
         return True
     return False
 
-def TransposeSqueezeReplace(op, X, perm: ir.Attr, axes: ir.Attr):
-    idx = axes.as_ints()[0]
+def TransposeSqueezeReplace(op: Builder, X, perm: ir.Attr, axes: ir.Value):
+    idx = axes.const_value.numpy()[0]
     idx = perm.as_ints()[idx]
-    return op.Squeeze(X, axes=[idx])
+    axes_tensor = op.initializer(ir.tensor([idx], name=f"{X.name}_squeeze"))
+    return op.Squeeze(X, axes_tensor)
 
 def UnsqueezeTranspose(op, X, perm, axes):
-    return op.Transpose(op.Unsqueeze(X, axes=axes), perm=perm)
+    return op.Transpose(op.Unsqueeze(X, axes), perm=perm)
 
-def UnsqueezeTransposeCond(op, X, perm, axes):
+def UnsqueezeTransposeCond(op, X, perm, axes: ir.Value):
     perm = perm.as_ints()
-    axes = axes.as_ints()
+    axes = axes.const_value.numpy()
     print(perm, axes)
     if perm[0] == 1 and perm[1] == 2 and perm[2] == 0 and axes[0] == 0:
         return True
     return False
 
-def UnsqueezeTransposeReplace(op, X, perm: ir.Attr, axes: ir.Attr):
+def UnsqueezeTransposeReplace(op: Builder, X, perm: ir.Attr, axes: ir.Value):
     print(perm, axes)
-    return op.Unsqueeze(X, axes=[2])
+    axes_tensor = op.initializer(ir.tensor([2], name=f"{X.name}_unsqueeze"))
+    return op.Unsqueeze(X, axes_tensor)
 
 
 
-def UnSqueezeSqueeze(op, X, axes0):
-    return op.Squeeze(op.Unsqueeze(X, axes=axes0), axes=axes0)
+def UnSqueezeSqueeze(op, X, axes0, axes1):
+    return op.Squeeze(op.Unsqueeze(X, axes=axes0), axes=axes1)
 
-def UnSqueezeSqueezeReplace(op, X, axes0: ir.Attr):
+def UnSqueezeSqueezeCond(op, X, axes0: ir.Value, axes1: ir.Value):
+    return axes0.const_value.numpy() == axes1.const_value.numpy()
+
+def UnSqueezeSqueezeReplace(op, X, axes0: ir.Value, axes1: ir.Value):
     return X
 
 
@@ -274,8 +246,9 @@ def Conv257Replace(op, X: ir.Value, W: ir.Value, B: ir.Value, dilations: ir.Attr
     split_dim = [single_dim] * split_number
     split_dim[-1] = X.shape[1] - (split_number-1)*single_dim
     print(f"orig={X.shape}, split_dim={split_dim}")
+    split_dim_tensor = op.initializer(ir.tensor(split_dim, name=f"{X.name}_split_dim"))
 
-    X_splitted: ir.Value = op.Split(X, axis=1, split=split_dim, _outputs=split_outputs)
+    X_splitted: ir.Value = op.Split(X, split_dim_tensor, axis=1, _outputs=split_outputs)
 
     for i, split_item in enumerate(split_dim):
         shape = []
@@ -288,7 +261,7 @@ def Conv257Replace(op, X: ir.Value, W: ir.Value, B: ir.Value, dilations: ir.Attr
         X_splitted[i].shape = ir.Shape(shape)
 
     split_outputs = [f"{W.name}_split_{i}" for i in range(split_number)]
-    W_splitted = op.Split(W, axis=1, split=split_dim, _outputs=split_outputs)
+    W_splitted = op.Split(W, split_dim_tensor, axis=1, _outputs=split_outputs)
 
     if B is not None:
         output = op.Conv(X_splitted[0], W_splitted[0], B, dilations=dilations, kernel_shape=kernel_shape, pads=pads, strides=strides)
@@ -318,8 +291,9 @@ def Conv257OutReplace(op, X: ir.Value, W: ir.Value, B: ir.Value, dilations: ir.A
     split_dim = [single_dim] * split_number
     split_dim[-1] = W.shape[0] - (split_number-1)*single_dim
     print(f"orig={W.shape}, split_dim={split_dim}")
+    split_dim_tensor = op.initializer(ir.tensor(split_dim, name=f"{W.name}_split_dim"))
 
-    W_splitted: ir.Value = op.Split(W, axis=0, split=split_dim, _outputs=split_outputs)
+    W_splitted: ir.Value = op.Split(W, split_dim_tensor, axis=0, _outputs=split_outputs)
 
     for i, split_item in enumerate(split_dim):
         shape = []
@@ -332,7 +306,7 @@ def Conv257OutReplace(op, X: ir.Value, W: ir.Value, B: ir.Value, dilations: ir.A
         W_splitted[i].shape = ir.Shape(shape)
 
     split_outputs = [f"{W.name}_b_split_{i}" for i in range(split_number)]
-    B_splitted: ir.Value = op.Split(B, axis=0, split=split_dim, _outputs=split_outputs)
+    B_splitted: ir.Value = op.Split(B, split_dim_tensor, axis=0, _outputs=split_outputs)
 
     for i, split_item in enumerate(split_dim):
         shape = []
@@ -368,10 +342,11 @@ def GemmWithCReplace(op, A: ir.Value, B: ir.Value, C: ir.Value, alpha: ir.Attr, 
     split_dim = [single_dim] * split_number
     split_dim[-1] = A.shape[1] - (split_number-1)*single_dim
     print(f"orig={A.shape}, split_dim={split_dim}")
+    split_dim_tensor = op.initializer(ir.tensor(split_dim, name=f"{A.name}_split_dim"))
 
     axis_to_split = 1 if transA.value == 0 else 0
     print(f"axis={axis_to_split}")
-    A_splitted: ir.Value = op.Split(A, axis=axis_to_split, split=split_dim, _outputs=split_outputs)
+    A_splitted: ir.Value = op.Split(A, split_dim_tensor, axis=axis_to_split, _outputs=split_outputs)
 
     for i, split_item in enumerate(split_dim):
         shape = []
@@ -386,7 +361,7 @@ def GemmWithCReplace(op, A: ir.Value, B: ir.Value, C: ir.Value, alpha: ir.Attr, 
     split_outputs = [f"{B.name}_split_{i}" for i in range(split_number)]
     axis_to_split = 0 if transB.value == 0 else 1
     print(f"axis={axis_to_split}")
-    B_splitted = op.Split(B, axis=axis_to_split, split=split_dim, _outputs=split_outputs)
+    B_splitted = op.Split(B, split_dim_tensor, axis=axis_to_split, _outputs=split_outputs)
 
     if C is not None:
         output = op.Gemm(A_splitted[0], B_splitted[0], C, alpha=alpha, beta=beta, transA=transA, transB=transB)
@@ -413,14 +388,14 @@ def apply_rewrite(model):
         pattern.RewriteRule(
             LSTM,  # Target Pattern
             LoweredLSTM,  # Replacement Pattern
-            None, # condition_function,
+            LSTMCond, # condition_function,
             name="LSTM",
-            verbose=10
+            #verbose=10
         ),
         pattern.RewriteRule(
             GRU,  # Target Pattern
             LoweredGRU,  # Replacement Pattern
-            None, # condition_function,
+            GRUCond, # condition_function,
             name="GRU",
             verbose=10
         ),
@@ -429,21 +404,21 @@ def apply_rewrite(model):
             TransposeSqueezeReplace,  # Replacement Pattern
             TransposeSqueezeCond, # condition_function,
             name="TransposeSqueeze",
-            verbose=10
+            #verbose=10
         ),
         pattern.RewriteRule(
             UnSqueezeSqueeze,  # Target Pattern
             UnSqueezeSqueezeReplace,  # Replacement Pattern
-            None, # condition_function,
+            UnSqueezeSqueezeCond, # condition_function,
             name="UnSqueezeSqueeze",
-            verbose=10
+            #verbose=10
         ),
         pattern.RewriteRule(
             UnsqueezeTranspose,  # Target Pattern
             UnsqueezeTransposeReplace,  # Replacement Pattern
             UnsqueezeTransposeCond, # condition_function,
             name="UnsqueezeTranspose",
-            verbose=10
+            #verbose=10
         )
     ]
     model_with_rewrite_applied = rewrite(
@@ -459,25 +434,25 @@ def apply_rewrite2(model):
             Conv257,  # Target Pattern
             Conv257Replace,  # Replacement Pattern
             Conv257Cond, # condition_function,
-            verbose=10
+            #verbose=10
         ),
         pattern.RewriteRule(
             Conv257Out,  # Target Pattern
             Conv257OutReplace,  # Replacement Pattern
             Conv257OutCond, # condition_function,
-            verbose=10
+            #verbose=10
         ),
         pattern.RewriteRule(
             GemmWithC,  # Target Pattern
             GemmWithCReplace,  # Replacement Pattern
             GemmWithCCond, # condition_function,
-            verbose=10
+            #verbose=10
         ),
         pattern.RewriteRule(
             GemmWithoutC,  # Target Pattern
             GemmWithoutCReplace,  # Replacement Pattern
             GemmWithoutCCond, # condition_function,
-            verbose=10
+            #verbose=10
         )
     ]
     model_with_rewrite_applied = rewrite(
@@ -537,6 +512,7 @@ onnx_model = onnx.load(sys.argv[1])
 onnx_model = version_converter.convert_version(onnx_model, 13)
 make_dim_param_fixed(onnx_model.graph, "batch_size", 1)
 modified_model = onnx.load(sys.argv[1])
+modified_model = version_converter.convert_version(modified_model, 13)
 make_dim_param_fixed(modified_model.graph, "batch_size", 1)
 
 crop_tensor_from_257_to_256(modified_model.graph)
@@ -613,7 +589,7 @@ for k in output_original.keys() & output_modified.keys():
     diff_rms = numpy.sqrt(numpy.mean(numpy.square(original_output_tensor - modified_output_tensor)))
     if diff_rms != 0.0:
         print(f"{k}: {diff_rms}")
-print(numpy.max(numpy.abs(output_modified["val_15"])))
+
 
 preprocess.quant_pre_process(modified_model, f"{basename}_rewritten_p.onnx")
 
