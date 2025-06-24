@@ -1,0 +1,5 @@
+{
+	// Set Compiler_type to either gcc or iar
+	"compiler_type": "gcc",
+	"cubeide_path": "C:/Users/foobar/TOOLS/STM32CubeIDE_1.12.1/STM32CubeIDE"
+}

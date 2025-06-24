@@ -3,6 +3,7 @@ import os
 import onnx
 import onnxruntime
 import numpy
+import sys
 
 WIN_LENGTH = 400
 HOP_LENGTH = 100
@@ -27,8 +28,8 @@ def preprocessing(input_file):
     stft = (stft - numpy.mean(stft, axis=0)) / numpy.std(stft, axis=0)
     return stft
 
-def generate_calibration_data(model_file, with_outputs=False):
-    quant_files = [os.path.join("quant", f) for f in os.listdir("quant") if os.path.isfile(os.path.join("quant", f))]
+def generate_calibration_data(model_file, with_outputs=False, fast=False, end_with_none=True):
+    quant_files = [os.path.join("data/quant", f) for f in os.listdir("data/quant") if os.path.isfile(os.path.join("data/quant", f))]
     onnx_model = onnx.load(model_file)
     model_runner =  onnxruntime.InferenceSession(model_file)
     print([ output.name for output in model_runner.get_outputs() ])
@@ -46,8 +47,9 @@ def generate_calibration_data(model_file, with_outputs=False):
                         dim = [ d.dim_value for d in input.type.tensor_type.shape.dim ]
                         inputs[input.name] = stft.astype(numpy.float32)[0:256].reshape(*dim)
                     else:
-                        if input.name in hidden_layers_data:
-                            inputs[input.name] = hidden_layers_data[input.name]
+                        previous_output_name = input.name.replace("input", "output")
+                        if previous_output_name in hidden_layers_data:
+                            inputs[input.name] = hidden_layers_data[previous_output_name]
                         else:
                             dim = [ d.dim_value for d in input.type.tensor_type.shape.dim ]
                             inputs[input.name] = numpy.zeros(dim).astype(numpy.float32)
@@ -61,11 +63,24 @@ def generate_calibration_data(model_file, with_outputs=False):
                     yield inputs, outputs
                 else:
                     yield inputs
+
+                if fast:
+                    if end_with_none:
+                        yield None
+                    return
     
-    yield None
+    if end_with_none:
+        yield None
 
 if __name__ == "__main__":
-    for i, (inputs, outputs) in enumerate(generate_calibration_data("denoiser_dns_rewritten_q.onnx", True)):
+    if len(sys.argv) > 1:
+        model_path = sys.argv[1]
+    else:
+        model_path = "tmp/denoiser_dns_q.onnx"
+
+    basename = os.path.basename(os.path.splitext(model_path)[0])
+    validation_data_path = f"tmp/{basename}_validation.npz"
+    for i, (inputs, outputs) in enumerate(generate_calibration_data(model_path, True)):
         if i < 100:
             continue
         args = {}
@@ -80,6 +95,6 @@ if __name__ == "__main__":
             assert output is not None
             args[f"m_outputs_{output_index}"] = output
             output_index = output_index + 1
-        numpy.savez(f"validation.npz", **args)
+        numpy.savez(validation_data_path, **args)
         print(f"Done, {input_index} inputs, {output_index} outputs")
         break

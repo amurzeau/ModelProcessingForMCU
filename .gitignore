@@ -1,7 +1,21 @@
-venv
+venv*
 .directory
 *.onnx
+.vscode/perl-lang
+.Trash-*
+__pycache__
+data
+tmp
 st_ai_output
 st_ai_ws
 vela
-.vscode/perl-lang
+*_tflite/
+output
+
+
+# STM32N6 validation
+compile.log
+n6_loader.log
+validation.npz
+ai_runner.log
+
