@@ -26,6 +26,16 @@
             "memory_pool": "stm32n6__noextmem.mpool",
             "machine_desc": "stm32n6.mdesc",
             "options" : "--optimization 3 --onnx-output processed.onnx --save-all --all-buffers-info --mvei --cache-maintenance --Oauto-sched --native-float --enable-virtual-mem-pools --Omax-ca-pipe 4 --Ocache-opt --Os"
+        },
+        "n6-flash-denoiser_dns_q_accurate": {
+            "memory_pool": "stm32n6__flash.mpool",
+            "machine_desc": "stm32n6.mdesc",
+            "options" : "--enable-epoch-controller --optimization 3 --onnx-output processed.onnx --save-all --all-buffers-info --mvei --cache-maintenance --Oauto-sched --native-float --enable-virtual-mem-pools --Omax-ca-pipe 4 --Ocache-opt --Os"
+        },
+        "n6-flash-denoiser_dns_q_fast": {
+            "memory_pool": "stm32n6__flash2.mpool",
+            "machine_desc": "stm32n6.mdesc",
+            "options" : "--enable-epoch-controller --optimization 3 --onnx-output processed.onnx --save-all --all-buffers-info --mvei --cache-maintenance --Oauto-sched --native-float --enable-virtual-mem-pools --Omax-ca-pipe 4 --Ocache-opt --Os"
         }
     }
 }
